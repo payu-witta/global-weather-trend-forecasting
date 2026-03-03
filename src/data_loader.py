@@ -103,3 +103,80 @@ def load_dataset(data_dir=None, try_kaggle=True):
 
     logger.info("Loaded %d rows x %d columns", *df.shape)
     return df
+
+
+REQUIRED_COLUMNS = [
+    "country",
+    "location_name",
+    "latitude",
+    "longitude",
+    "last_updated",
+    "temperature_celsius",
+    "humidity",
+    "wind_kph",
+    "pressure_mb",
+    "precip_mm",
+]
+
+
+def validate_schema(df):
+    """
+    Check that all required columns are present.
+
+    Returns True when schema is valid, False otherwise.
+    """
+    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        logger.warning("Missing expected columns: %s", missing)
+        return False
+    logger.info("Schema validation passed")
+    return True
+
+
+def get_dataset_summary(df):
+    """Return a dict with key dataset statistics."""
+    summary = {
+        "shape": df.shape,
+        "columns": list(df.columns),
+        "missing_per_column": df.isnull().sum()[df.isnull().sum() > 0].to_dict(),
+        "duplicate_rows": int(df.duplicated().sum()),
+        "countries": int(df["country"].nunique()) if "country" in df.columns else None,
+        "locations": int(df["location_name"].nunique()) if "location_name" in df.columns else None,
+    }
+
+    if TIME_COLUMN in df.columns:
+        dates = pd.to_datetime(df[TIME_COLUMN], errors="coerce")
+        summary["date_range"] = {
+            "min": str(dates.min()),
+            "max": str(dates.max()),
+            "unique_dates": int(dates.dt.date.nunique()),
+        }
+
+    numeric_cols = [c for c in NUMERICAL_FEATURES if c in df.columns]
+    if numeric_cols:
+        summary["numeric_summary"] = df[numeric_cols].describe().round(3).to_dict()
+
+    return summary
+
+
+def print_summary(df):
+    """Pretty-print dataset summary to logger."""
+    s = get_dataset_summary(df)
+    logger.info("Dataset summary:")
+    logger.info("  Shape: %s rows x %s columns", *s["shape"])
+    logger.info("  Countries: %s", s.get("countries"))
+    logger.info("  Locations: %s", s.get("locations"))
+    if "date_range" in s:
+        dr = s["date_range"]
+        logger.info(
+            "  Date range: %s to %s (%s unique dates)",
+            dr["min"],
+            dr["max"],
+            dr["unique_dates"],
+        )
+    logger.info("  Duplicates: %s", s.get("duplicate_rows"))
+    missing = s.get("missing_per_column", {})
+    if missing:
+        logger.info("  Columns with missing values: %d", len(missing))
+    else:
+        logger.info("  No missing values detected")
