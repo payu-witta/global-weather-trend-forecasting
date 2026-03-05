@@ -99,3 +99,91 @@ def plot_correlation_heatmap(df, columns=None):
     )
     ax.set_title("Feature Correlation Matrix", fontsize=13, fontweight="bold")
     return _save(fig, "correlation_heatmap.png")
+
+
+def plot_time_series(daily_df, column=TARGET_VARIABLE, rolling_window=30):
+    """Plot daily temperature with rolling mean and std band."""
+    import matplotlib.dates as mdates
+
+    fig, ax = plt.subplots(figsize=FIGURE_SIZE_WIDE)
+    dates = pd.to_datetime(daily_df["date"])
+    values = daily_df[column]
+    roll = values.rolling(rolling_window, min_periods=1)
+
+    ax.plot(dates, values, color="steelblue", alpha=0.5, lw=1, label="Daily")
+    roll_mean = roll.mean()
+    roll_std = roll.std().fillna(0)
+    ax.plot(dates, roll_mean, color="darkorange", lw=2, label=f"{rolling_window}-day MA")
+    ax.fill_between(
+        dates, roll_mean - roll_std, roll_mean + roll_std, alpha=0.2, color="darkorange"
+    )
+
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    plt.xticks(rotation=45)
+    ax.set_title(f"Global Mean {column} Over Time", fontsize=13, fontweight="bold")
+    ax.set_xlabel("Date")
+    ax.set_ylabel(column)
+    ax.legend()
+    return _save(fig, f"timeseries_{column}.png")
+
+
+def plot_seasonal_decomposition(daily_df, column=TARGET_VARIABLE):
+    """STL decomposition of the time series."""
+    import matplotlib.dates as mdates
+
+    try:
+        from statsmodels.tsa.seasonal import STL
+    except ImportError:
+        logger.warning("statsmodels not available. Skipping decomposition plot.")
+        return
+
+    series = daily_df.set_index("date")[column].dropna()
+    series.index = pd.to_datetime(series.index)
+    series = series.asfreq("D").interpolate()
+
+    if len(series) < 14:
+        return
+
+    period = min(7, len(series) // 3)
+    stl = STL(series, period=period, robust=True)
+    res = stl.fit()
+
+    fig, axes = plt.subplots(4, 1, figsize=(14, 10), sharex=True)
+    axes[0].plot(series.index, series, color="steelblue", lw=1)
+    axes[0].set_ylabel("Observed")
+    axes[1].plot(series.index, res.trend, color="darkorange", lw=1.5)
+    axes[1].set_ylabel("Trend")
+    axes[2].plot(series.index, res.seasonal, color="green", lw=1)
+    axes[2].set_ylabel("Seasonal")
+    axes[3].plot(series.index, res.resid, color="red", lw=0.8, alpha=0.7)
+    axes[3].axhline(0, color="black", lw=0.5)
+    axes[3].set_ylabel("Residual")
+    axes[3].xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    plt.xticks(rotation=45)
+    fig.suptitle(f"STL Decomposition - {column}", fontsize=13, fontweight="bold")
+    return _save(fig, f"stl_decomposition_{column}.png")
+
+
+def plot_seasonal_patterns(daily_df, column=TARGET_VARIABLE):
+    """Box plot of temperature by month showing seasonal cycles."""
+    df = daily_df.copy()
+    df["month"] = pd.to_datetime(df["date"]).dt.month
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    data_by_month = [df[df["month"] == m][column].dropna().values for m in range(1, 13)]
+    bp = ax.boxplot(data_by_month, patch_artist=True, notch=False, vert=True)
+
+    colors = plt.cm.coolwarm(np.linspace(0, 1, 12))
+    for patch, color in zip(bp["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.8)
+
+    ax.set_xticks(range(1, 13))
+    ax.set_xticklabels(month_names)
+    ax.set_title("Seasonal Temperature Distribution by Month", fontsize=13, fontweight="bold")
+    ax.set_xlabel("Month")
+    ax.set_ylabel("Temperature (°C)")
+    return _save(fig, "seasonal_patterns.png")
