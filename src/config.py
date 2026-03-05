@@ -62,6 +62,59 @@ CATEGORICAL_FEATURES = [
 # All numeric columns used throughout the pipeline
 ALL_NUMERIC = NUMERICAL_FEATURES + AIR_QUALITY_COLUMNS
 
+# Time-series / forecasting
+FORECAST_HORIZON = 30  # days ahead
+RANDOM_SEED = 42
+TEST_SIZE = 0.2  # fraction of data used for evaluation
+
+# Rolling / lag feature windows
+ROLLING_WINDOWS = [7, 14, 30]
+LAG_DAYS = [1, 7, 14, 30]
+
+# SARIMA
+ARIMA_ORDER = (1, 1, 1)
+ARIMA_SEASONAL_ORDER = (1, 1, 1, 7)
+
+# XGBoost
+XGBOOST_PARAMS = {
+    "n_estimators": 300,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 3,
+    "random_state": RANDOM_SEED,
+    "n_jobs": -1,
+}
+
+# LightGBM
+LIGHTGBM_PARAMS = {
+    "n_estimators": 300,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_samples": 20,
+    "random_state": RANDOM_SEED,
+    "n_jobs": -1,
+    "verbose": -1,
+}
+
+# LSTM
+LSTM_PARAMS = {
+    "sequence_length": 30,
+    "hidden_size": 64,
+    "num_layers": 2,
+    "dropout": 0.2,
+    "epochs": 50,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+}
+
+# Anomaly detection
+CONTAMINATION = 0.05
+ZSCORE_THRESHOLD = 3.0
+
 # Figures
 FIGURE_DPI = 150
 FIGURE_SIZE_DEFAULT = (12, 6)

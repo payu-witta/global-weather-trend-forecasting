@@ -7,6 +7,9 @@ Steps performed:
   3. Normalize country names
   4. Handle missing values (numeric -> median, categorical -> mode)
   5. Clip physical outliers to valid ranges
+  6. IQR-based outlier replacement
+  7. Encode categoricals
+  8. Aggregate global daily means for time-series models
 """
 
 import logging
@@ -15,10 +18,17 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import (
+    ALL_NUMERIC,
     CATEGORICAL_FEATURES,
+    LOCATION_COLUMN,
+    NUMERICAL_FEATURES,
+    PROCESSED_DATA_DIR,
+    RANDOM_SEED,
+    TARGET_VARIABLE,
     TIME_COLUMN,
 )
 
@@ -185,3 +195,117 @@ def clip_physical_bounds(df):
                 )
     logger.info("Total values clipped to physical bounds: %d", clipped_total)
     return df
+
+
+def remove_iqr_outliers(df, columns, factor=3.0):
+    """
+    Replace extreme outliers (beyond factor×IQR) with column median.
+    Uses a conservative factor=3.0 to keep genuine extremes.
+    """
+    df = df.copy()
+    total_replaced = 0
+    for col in columns:
+        if col not in df.columns:
+            continue
+        q1 = df[col].quantile(0.25)
+        q3 = df[col].quantile(0.75)
+        iqr = q3 - q1
+        lower = q1 - factor * iqr
+        upper = q3 + factor * iqr
+        mask = (df[col] < lower) | (df[col] > upper)
+        n = mask.sum()
+        if n > 0:
+            df.loc[mask, col] = df[col].median()
+            total_replaced += n
+    logger.info(
+        "IQR outlier replacement: %d values across %d columns", total_replaced, len(columns)
+    )
+    return df
+
+
+def encode_categoricals(df):
+    """Label-encode low-cardinality categorical columns."""
+    df = df.copy()
+    from sklearn.preprocessing import LabelEncoder
+
+    encoders = {}
+    for col in CATEGORICAL_FEATURES:
+        if col in df.columns:
+            le = LabelEncoder()
+            df[col + "_encoded"] = le.fit_transform(df[col].astype(str))
+            encoders[col] = le
+    return df, encoders
+
+
+def aggregate_daily_global(df):
+    """
+    Aggregate all locations into a single global daily mean time series.
+
+    This is the primary input for SARIMA and Prophet models.
+    """
+    numeric_cols = [c for c in ALL_NUMERIC if c in df.columns]
+    daily = df.groupby("date")[numeric_cols].mean().reset_index()
+    daily["date"] = pd.to_datetime(daily["date"])
+    daily = daily.sort_values("date").reset_index(drop=True)
+    logger.info("Global daily aggregate: %d time steps", len(daily))
+    return daily
+
+
+def aggregate_daily_by_location(df):
+    """Aggregate to daily means per location. Returns a dict {location_name: DataFrame}."""
+    numeric_cols = [c for c in ALL_NUMERIC if c in df.columns]
+    grouped = {}
+    for loc, grp in df.groupby(LOCATION_COLUMN):
+        daily = grp.groupby("date")[numeric_cols].mean().reset_index()
+        daily["date"] = pd.to_datetime(daily["date"])
+        daily = daily.sort_values("date").reset_index(drop=True)
+        grouped[loc] = daily
+    logger.info("Per-location aggregation: %d locations", len(grouped))
+    return grouped
+
+
+def fit_scaler(df, columns):
+    """Fit StandardScaler on given columns. Returns (scaled_df, scaler)."""
+    scaler = StandardScaler()
+    df = df.copy()
+    existing = [c for c in columns if c in df.columns]
+    df[existing] = scaler.fit_transform(df[existing])
+    return df, scaler
+
+
+def run_preprocessing(df, save=True):
+    """
+    Execute the complete preprocessing pipeline.
+
+    Returns
+    -------
+    df_clean : pd.DataFrame
+    daily_global : pd.DataFrame
+    scaler : StandardScaler
+    """
+    logger.info("=== Preprocessing pipeline started ===")
+
+    df = parse_timestamps(df)
+    df = normalize_country_names(df)
+    df = remove_duplicates(df)
+    df = impute_missing(df)
+    df = clip_physical_bounds(df)
+
+    numeric_cols = [c for c in ALL_NUMERIC if c in df.columns]
+    df = remove_iqr_outliers(df, numeric_cols)
+
+    df, encoders = encode_categoricals(df)
+
+    daily_global = aggregate_daily_global(df)
+
+    scale_cols = [c for c in NUMERICAL_FEATURES if c in daily_global.columns]
+    daily_global_scaled, scaler = fit_scaler(daily_global, scale_cols)
+
+    if save:
+        PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(PROCESSED_DATA_DIR / "weather_clean.parquet", index=False)
+        daily_global.to_parquet(PROCESSED_DATA_DIR / "daily_global.parquet", index=False)
+        logger.info("Saved processed files to %s", PROCESSED_DATA_DIR)
+
+    logger.info("=== Preprocessing complete ===")
+    return df, daily_global, scaler
