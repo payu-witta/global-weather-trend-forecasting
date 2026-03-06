@@ -187,3 +187,207 @@ def plot_seasonal_patterns(daily_df, column=TARGET_VARIABLE):
     ax.set_xlabel("Month")
     ax.set_ylabel("Temperature (°C)")
     return _save(fig, "seasonal_patterns.png")
+
+
+def plot_global_warming_trend(daily_df, column=TARGET_VARIABLE):
+    """Scatter + regression line showing long-term temperature trend."""
+    import matplotlib.dates as mdates
+    from scipy import stats
+
+    fig, ax = plt.subplots(figsize=FIGURE_SIZE_WIDE)
+    dates = pd.to_datetime(daily_df["date"])
+    x_num = mdates.date2num(dates)
+    y = daily_df[column].values
+
+    ax.scatter(dates, y, alpha=0.3, s=10, color="steelblue", label="Daily Obs.")
+
+    slope, intercept, r, p, se = stats.linregress(x_num, y)
+    trend_y = slope * x_num + intercept
+    ax.plot(dates, trend_y, color="red", lw=2, label=f"Trend (slope={slope * 365:.3f}°C/yr)")
+
+    daily_df = daily_df.copy()
+    daily_df["year"] = pd.to_datetime(daily_df["date"]).dt.year
+    yearly = daily_df.groupby("year")[column].mean()
+    ax.plot(
+        pd.to_datetime(yearly.index.astype(str) + "-07-01"),
+        yearly.values,
+        color="darkorange",
+        lw=2,
+        marker="o",
+        markersize=6,
+        label="Yearly Mean",
+    )
+
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    plt.xticks(rotation=45)
+    ax.set_title("Global Temperature Trend", fontsize=13, fontweight="bold")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Temperature (°C)")
+    ax.legend()
+    return _save(fig, "global_warming_trend.png")
+
+
+def plot_anomalies(df_annotated, column=TARGET_VARIABLE):
+    """Overlay anomaly points on the time series."""
+    import matplotlib.dates as mdates
+
+    if "anomaly" not in df_annotated.columns:
+        return
+
+    fig, ax = plt.subplots(figsize=FIGURE_SIZE_WIDE)
+    dates = pd.to_datetime(df_annotated["date"])
+    vals = df_annotated[column]
+
+    ax.plot(dates, vals, color="steelblue", lw=1, alpha=0.7, label="Normal")
+    mask = df_annotated["anomaly"]
+    ax.scatter(dates[mask], vals[mask], color="red", zorder=5, s=50, label="Anomaly", marker="x")
+
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    plt.xticks(rotation=45)
+    ax.set_title(f"Anomaly Detection on {column}", fontsize=13, fontweight="bold")
+    ax.set_xlabel("Date")
+    ax.set_ylabel(column)
+    ax.legend()
+    return _save(fig, "anomaly_timeseries.png")
+
+
+def plot_forecast_comparison(model_results, n_display=90):
+    """Plot predicted vs actual for each model on one figure."""
+    n_models = len(model_results)
+    if n_models == 0:
+        return
+
+    fig, axes = plt.subplots(n_models, 1, figsize=(14, 4 * n_models), squeeze=False)
+
+    for ax, (model_name, res) in zip(axes.flatten(), model_results.items()):
+        if "test_preds" not in res or "test_actual" not in res:
+            ax.set_visible(False)
+            continue
+        actual = np.asarray(res["test_actual"])[-n_display:]
+        preds = np.asarray(res["test_preds"])[-n_display:]
+        x = np.arange(len(actual))
+        ax.plot(x, actual, label="Actual", color="steelblue", lw=1.5)
+        ax.plot(x, preds, label="Predicted", color="darkorange", lw=1.5, linestyle="--")
+        metrics = res.get("metrics", {})
+        title = f"{model_name} - MAE={metrics.get('MAE', 'N/A')} | RMSE={metrics.get('RMSE', 'N/A')}"
+        ax.set_title(title, fontsize=11, fontweight="bold")
+        ax.set_ylabel("Temperature (°C)")
+        ax.legend(fontsize=9)
+
+    axes[-1][0].set_xlabel("Test Step")
+    fig.suptitle("Forecast vs Actual (Test Set)", fontsize=14, fontweight="bold")
+    return _save(fig, "forecast_comparison.png")
+
+
+def plot_ensemble_comparison(comparison_df):
+    """Bar chart comparing MAE/RMSE across all models and ensembles."""
+    if comparison_df.empty or "RMSE" not in comparison_df.columns:
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    colors = [
+        "#2196F3" if t == "Individual" else "#FF5722"
+        for t in comparison_df.get("Type", ["Individual"] * len(comparison_df))
+    ]
+
+    axes[0].barh(comparison_df["Model"], comparison_df["RMSE"], color=colors, edgecolor="white")
+    axes[0].set_title("RMSE by Model", fontsize=12, fontweight="bold")
+    axes[0].set_xlabel("RMSE")
+    axes[0].invert_yaxis()
+
+    if "MAE" in comparison_df.columns:
+        axes[1].barh(comparison_df["Model"], comparison_df["MAE"], color=colors, edgecolor="white")
+        axes[1].set_title("MAE by Model", fontsize=12, fontweight="bold")
+        axes[1].set_xlabel("MAE")
+        axes[1].invert_yaxis()
+
+    from matplotlib.patches import Patch
+
+    legend = [Patch(color="#2196F3", label="Individual"), Patch(color="#FF5722", label="Ensemble")]
+    fig.legend(handles=legend, loc="upper right")
+    fig.suptitle("Model Performance Comparison", fontsize=14, fontweight="bold")
+    return _save(fig, "ensemble_comparison.png")
+
+
+def plot_air_quality_correlations(df, target_col=TARGET_VARIABLE):
+    """Scatter matrix between air quality columns and temperature."""
+    aq_cols = [c for c in AIR_QUALITY_COLUMNS if c in df.columns]
+    if not aq_cols:
+        logger.warning("No air quality columns found.")
+        return
+
+    sample = df[[target_col] + aq_cols].dropna().sample(
+        min(2000, len(df)), random_state=RANDOM_SEED
+    )
+
+    n = len(aq_cols)
+    fig, axes = plt.subplots(2, (n + 1) // 2, figsize=(7 * ((n + 1) // 2), 10))
+    axes = np.array(axes).flatten()
+
+    for i, col in enumerate(aq_cols):
+        ax = axes[i]
+        ax.scatter(sample[col], sample[target_col], alpha=0.2, s=8, color="steelblue")
+        try:
+            from scipy.stats import pearsonr
+
+            r, _ = pearsonr(sample[col].dropna(), sample[target_col].dropna())
+            ax.set_title(f"{col}\n(r={r:.3f})", fontsize=9, fontweight="bold")
+        except Exception:
+            ax.set_title(col, fontsize=9, fontweight="bold")
+        ax.set_xlabel(col, fontsize=8)
+        ax.set_ylabel(target_col, fontsize=8)
+
+    for j in range(len(aq_cols), len(axes)):
+        axes[j].set_visible(False)
+
+    fig.suptitle("Air Quality vs Temperature Correlations", fontsize=13, fontweight="bold")
+    return _save(fig, "air_quality_correlations.png")
+
+
+def plot_regional_comparison(regional_df, target_col="mean_temp", top_n=20):
+    """Horizontal bar chart of mean temperature by country."""
+    if regional_df.empty or "country" not in regional_df.columns:
+        return
+
+    df_plot = regional_df.dropna(subset=[target_col]).head(top_n)
+    fig, ax = plt.subplots(figsize=(10, max(6, top_n * 0.45)))
+    colors = plt.cm.RdBu_r(
+        (df_plot[target_col] - df_plot[target_col].min())
+        / (df_plot[target_col].max() - df_plot[target_col].min() + 1e-9)
+    )
+    ax.barh(df_plot["country"], df_plot[target_col], color=colors, edgecolor="white")
+    ax.set_title(f"Top {top_n} Countries by Mean Temperature", fontsize=13, fontweight="bold")
+    ax.set_xlabel("Mean Temperature (°C)")
+    ax.invert_yaxis()
+    plt.tight_layout()
+    return _save(fig, "regional_temperature_comparison.png")
+
+
+def run_all_visualizations(daily_df, df_clean, df_annotated, model_results, ensemble_df, regional_df):
+    """Generate and save all visualization artifacts."""
+    logger.info("=== Generating visualizations ===")
+
+    plot_distributions(daily_df)
+    plot_correlation_heatmap(daily_df)
+    plot_time_series(daily_df)
+    plot_seasonal_decomposition(daily_df)
+    plot_seasonal_patterns(daily_df)
+    plot_global_warming_trend(daily_df)
+
+    if df_annotated is not None:
+        plot_anomalies(df_annotated)
+
+    if df_clean is not None:
+        plot_air_quality_correlations(df_clean)
+
+    if regional_df is not None and not regional_df.empty:
+        plot_regional_comparison(regional_df)
+
+    if model_results:
+        plot_forecast_comparison(model_results)
+
+    if ensemble_df is not None and not ensemble_df.empty:
+        plot_ensemble_comparison(ensemble_df)
+
+    logger.info("=== All visualizations saved to %s ===", FIGURES_DIR)
