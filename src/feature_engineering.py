@@ -102,3 +102,121 @@ def add_lag_features(df, target_col=TARGET_VARIABLE, lags=None):
         df[f"{target_col}_lag_{lag}d"] = df[target_col].shift(lag)
     logger.info("Added lag features for lags: %s", lags)
     return df
+
+
+def add_derived_features(df):
+    """
+    Add physically meaningful derived variables:
+      - temperature change rate (day-over-day delta)
+      - approximate dew point (Magnus formula)
+      - apparent heat index (Steadman formula, simplified)
+      - wind components (u, v)
+      - pressure tendency
+    """
+    df = df.copy()
+
+    if "temperature_celsius" in df.columns:
+        df["temp_change_rate"] = df["temperature_celsius"].diff().fillna(0)
+        df["temp_change_rate_abs"] = df["temp_change_rate"].abs()
+
+    if "temperature_celsius" in df.columns and "humidity" in df.columns:
+        T = df["temperature_celsius"]
+        RH = df["humidity"].clip(1, 100)
+        a, b = 17.27, 237.7
+        alpha = (a * T) / (b + T) + np.log(RH / 100.0)
+        df["dew_point"] = (b * alpha) / (a - alpha)
+
+    if "temperature_celsius" in df.columns and "humidity" in df.columns:
+        T = df["temperature_celsius"]
+        RH = df["humidity"]
+        df["heat_index"] = (
+            -8.78469475556
+            + 1.61139411 * T
+            + 2.33854883889 * RH
+            - 0.14611605 * T * RH
+            - 0.012308094 * T**2
+            - 0.0164248277778 * RH**2
+            + 0.002211732 * T**2 * RH
+            + 0.00072546 * T * RH**2
+            - 0.000003582 * T**2 * RH**2
+        )
+
+    if "wind_kph" in df.columns and "wind_degree" in df.columns:
+        wind_rad = np.deg2rad(df["wind_degree"])
+        df["wind_u"] = -df["wind_kph"] * np.sin(wind_rad)
+        df["wind_v"] = -df["wind_kph"] * np.cos(wind_rad)
+
+    if "pressure_mb" in df.columns:
+        df["pressure_tendency"] = df["pressure_mb"].diff().fillna(0)
+
+    if "precip_mm" in df.columns:
+        df["is_rainy"] = (df["precip_mm"] > 0.1).astype(int)
+
+    logger.info("Added derived meteorological features")
+    return df
+
+
+def add_monthly_stats(df, target_col=TARGET_VARIABLE):
+    """Merge monthly mean and std back onto the daily DataFrame."""
+    df = df.copy()
+    if "month" not in df.columns:
+        df = add_calendar_features(df)
+
+    monthly = (
+        df.groupby("month")[target_col]
+        .agg(monthly_mean="mean", monthly_std="std")
+        .reset_index()
+    )
+    df = df.merge(monthly, on="month", how="left")
+    df["temp_deviation_from_monthly"] = df[target_col] - df["monthly_mean"]
+    logger.info("Added monthly climatological statistics")
+    return df
+
+
+def add_yearly_anomaly(df, target_col=TARGET_VARIABLE):
+    """Compute deviation from the overall global mean (climate anomaly signal)."""
+    df = df.copy()
+    global_mean = df[target_col].mean()
+    df["climate_anomaly"] = df[target_col] - global_mean
+    logger.info(
+        "Added climate anomaly feature (deviation from global mean=%.2f)", global_mean
+    )
+    return df
+
+
+def run_feature_engineering(daily_df, extra_numeric_cols=None):
+    """
+    Apply all feature engineering steps to the global daily DataFrame.
+
+    Returns
+    -------
+    pd.DataFrame
+        Enriched DataFrame ready for model training.
+    """
+    logger.info("=== Feature engineering started ===")
+
+    df = daily_df.copy()
+    df = add_calendar_features(df)
+    df = add_rolling_features(df)
+    df = add_lag_features(df)
+    df = add_derived_features(df)
+    df = add_monthly_stats(df)
+    df = add_yearly_anomaly(df)
+
+    if extra_numeric_cols:
+        df = add_rolling_features_multi(df, extra_numeric_cols)
+
+    max_lag = max(LAG_DAYS)
+    df = df.iloc[max_lag:].reset_index(drop=True)
+
+    logger.info("Feature engineering complete. Shape: %s", df.shape)
+    logger.info("=== Feature engineering done ===")
+    return df
+
+
+def get_feature_columns(df, exclude=None):
+    """Return list of numeric columns suitable for ML models."""
+    if exclude is None:
+        exclude = ["date", "year"]
+    numeric = df.select_dtypes(include=[float, int]).columns.tolist()
+    return [c for c in numeric if c not in exclude]
