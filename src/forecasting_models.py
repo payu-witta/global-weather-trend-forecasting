@@ -1,9 +1,11 @@
 """
 Forecasting models for global temperature prediction.
 
-Models implemented (so far):
+Models implemented:
   1. SARIMA   - statsmodels
   2. Prophet  - Meta Prophet
+  3. XGBoost  - gradient boosting with lag/calendar features
+  4. LightGBM - gradient boosting with lag/calendar features
 
 Each model exposes a train() and predict() interface.
 Evaluation metrics: MAE, RMSE, MAPE.
@@ -24,10 +26,12 @@ from config import (
     ARIMA_SEASONAL_ORDER,
     FORECAST_HORIZON,
     FORECASTS_DIR,
+    LIGHTGBM_PARAMS,
     MODELS_DIR,
     RANDOM_SEED,
     TARGET_VARIABLE,
     TEST_SIZE,
+    XGBOOST_PARAMS,
 )
 
 logger = logging.getLogger(__name__)
@@ -182,3 +186,65 @@ class ProphetModel:
         with open(path, "w") as f:
             json.dump(model_to_json(self.model), f)
         logger.info("Prophet model saved -> %s", path)
+
+
+class GradientBoostingModel:
+    """XGBoost and LightGBM gradient boosting wrapper for tabular forecasting."""
+
+    def __init__(self, backend="xgboost", params=None):
+        self.backend = backend
+        self.params = params or (XGBOOST_PARAMS if backend == "xgboost" else LIGHTGBM_PARAMS)
+        self.model = None
+        self.feature_cols = None
+
+    def _build_model(self):
+        if self.backend == "xgboost":
+            from xgboost import XGBRegressor
+            return XGBRegressor(**self.params)
+        else:
+            from lightgbm import LGBMRegressor
+            return LGBMRegressor(**self.params)
+
+    def train(self, df_train, target_col=TARGET_VARIABLE, exclude_cols=None):
+        """Train on tabular features."""
+        if exclude_cols is None:
+            exclude_cols = {"date", "season", "anomaly", "if_anomaly", "lof_anomaly",
+                            "zscore_anomaly", "zscore", "anomaly_type", "ensemble_anomaly"}
+
+        self.feature_cols = [
+            c for c in df_train.columns
+            if c != target_col and c not in exclude_cols
+            and df_train[c].dtype in [float, int, np.float64, np.int64]
+        ]
+
+        X = df_train[self.feature_cols].fillna(0)
+        y = df_train[target_col]
+
+        logger.info(
+            "Training %s on %d features, %d samples ...",
+            self.backend.upper(), len(self.feature_cols), len(X),
+        )
+        self.model = self._build_model()
+        self.model.fit(X, y)
+        logger.info("%s training complete.", self.backend.upper())
+        return self
+
+    def predict(self, df):
+        X = df[self.feature_cols].fillna(0)
+        return pd.Series(self.model.predict(X), index=df.index)
+
+    def evaluate(self, df_test, target_col=TARGET_VARIABLE):
+        preds = self.predict(df_test)
+        return compute_metrics(df_test[target_col].values, preds.values, self.backend.upper())
+
+    def get_feature_importance(self):
+        scores = self.model.feature_importances_
+        return pd.Series(scores, index=self.feature_cols).sort_values(ascending=False)
+
+    def save(self, path=None):
+        import joblib
+        if path is None:
+            path = MODELS_DIR / f"{self.backend}_model.pkl"
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        joblib.dump(self.model, path)
+        logger.info("%s model saved -> %s", self.backend.upper(), path)
