@@ -289,7 +289,7 @@ def run_feature_importance(model_results, feature_df, target_col=TARGET_VARIABLE
         )
 
         if model_name == "XGBoost":
-            shap_analysis(fitted_model, X_train, X_test, feature_names=feature_cols)
+            shap_analysis(fitted_model, X_train, X_test, feature_cols)
 
         logger.info("%s feature importance analysis complete.", model_name)
         break
