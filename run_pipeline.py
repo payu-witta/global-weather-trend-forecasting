@@ -196,6 +196,163 @@ def stage_feature_importance(model_results, feature_df, skip=False):
     logger.info("Feature importance done in %.1fs", time.time() - t0)
 
 
+def stage_spatial(df_clean):
+    from spatial_analysis import run_spatial_analysis
+
+    logger.info("== Stage 9: Spatial Analysis ==")
+    t0 = time.time()
+    location_df, regional_df = run_spatial_analysis(df_clean)
+    logger.info("Spatial analysis done in %.1fs", time.time() - t0)
+    return location_df, regional_df
+
+
+def stage_climate_analysis(daily_global):
+    """Generate climate-specific reports and visualizations."""
+    import pandas as pd
+
+    logger.info("== Stage 10: Climate Analysis ==")
+    t0 = time.time()
+
+    df = daily_global.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df["year"] = df["date"].dt.year
+
+    yearly_means = df.groupby("year")[TARGET_VARIABLE].mean().reset_index()
+    yearly_means.columns = ["year", "mean_temperature_celsius"]
+
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    yearly_means.to_csv(REPORTS_DIR / "yearly_temperature_trend.csv", index=False)
+
+    if len(df) > 30:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(12, 5))
+        ax.bar(
+            yearly_means["year"],
+            yearly_means["mean_temperature_celsius"],
+            color="steelblue",
+            edgecolor="white",
+            alpha=0.8,
+        )
+        ax.set_title("Annual Mean Temperature", fontsize=13, fontweight="bold")
+        ax.set_xlabel("Year")
+        ax.set_ylabel("Mean Temperature (°C)")
+        plt.tight_layout()
+        FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+        fig.savefig(FIGURES_DIR / "annual_mean_temperature.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    logger.info("Climate analysis done in %.1fs", time.time() - t0)
+    return yearly_means
+
+
+def stage_environmental_impact(daily_global, df_clean):
+    """Analyse air quality relationships with weather variables."""
+    import pandas as pd
+
+    from config import AIR_QUALITY_COLUMNS
+
+    logger.info("== Stage 11: Environmental Impact Analysis ==")
+    t0 = time.time()
+
+    aq_cols = [c for c in AIR_QUALITY_COLUMNS if c in daily_global.columns]
+    if not aq_cols:
+        logger.warning("No air quality columns found in daily aggregate. Skipping.")
+        return
+
+    corr_target = [TARGET_VARIABLE, "humidity", "wind_kph", "pressure_mb"]
+    corr_target = [c for c in corr_target if c in daily_global.columns]
+    weather_aq = daily_global[corr_target + aq_cols].dropna()
+    corr_matrix = weather_aq.corr()
+
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    corr_matrix.to_csv(REPORTS_DIR / "air_quality_weather_correlation.csv")
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    fig, ax = plt.subplots(figsize=(12, 10))
+    sns.heatmap(
+        corr_matrix,
+        ax=ax,
+        cmap="RdBu_r",
+        center=0,
+        annot=True,
+        fmt=".2f",
+        annot_kws={"size": 8},
+        linewidths=0.5,
+    )
+    ax.set_title("Air Quality x Weather Correlation", fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    fig.savefig(FIGURES_DIR / "air_quality_weather_heatmap.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Environmental impact analysis done in %.1fs", time.time() - t0)
+
+
+def _stage_statistical_diagnostics(daily_global, model_results):
+    import pandas as pd
+
+    from statistical_diagnostics import run_statistical_diagnostics
+
+    logger.info("== Stage 12: Statistical Diagnostics ==")
+    t0 = time.time()
+    ts = daily_global.set_index("date")[TARGET_VARIABLE].dropna()
+    ts.index = pd.to_datetime(ts.index)
+    run_statistical_diagnostics(ts, model_results)
+    logger.info("Statistical diagnostics done in %.1fs", time.time() - t0)
+
+
+def _stage_backtesting(daily_global, feature_df, skip=False):
+    if skip:
+        logger.info("== Stage 13: Walk-Forward Backtest -- SKIPPED ==")
+        return {}
+
+    import pandas as pd
+
+    from backtesting import run_backtesting
+
+    logger.info("== Stage 13: Walk-Forward Backtest ==")
+    t0 = time.time()
+    ts = daily_global.set_index("date")[TARGET_VARIABLE].dropna()
+    ts.index = pd.to_datetime(ts.index)
+    results = run_backtesting(ts, feature_df, n_splits=5)
+    logger.info("Backtesting done in %.1fs", time.time() - t0)
+    return results
+
+
+def _stage_prediction_intervals(daily_global, feature_df, skip=False):
+    if skip:
+        logger.info("== Stage 14: Prediction Intervals -- SKIPPED ==")
+        return {}
+
+    import pandas as pd
+
+    from prediction_intervals import run_prediction_intervals
+
+    logger.info("== Stage 14: Prediction Intervals ==")
+    t0 = time.time()
+    ts = daily_global.set_index("date")[TARGET_VARIABLE].dropna()
+    ts.index = pd.to_datetime(ts.index)
+    results = run_prediction_intervals(ts, feature_df)
+    logger.info("Prediction intervals done in %.1fs", time.time() - t0)
+    return results
+
+
+def _stage_regional_analysis(df_clean):
+    from regional_analysis import run_regional_analysis
+
+    logger.info("== Stage 15: Regional Warming Analysis ==")
+    t0 = time.time()
+    run_regional_analysis(df_clean)
+    logger.info("Regional analysis done in %.1fs", time.time() - t0)
+
+
 def _stage_data_audit(df_raw):
     from data_audit import run_data_audit
 
@@ -214,6 +371,9 @@ def parse_args():
     parser.add_argument("--no-kaggle", action="store_true", help="Do not attempt Kaggle download")
     parser.add_argument("--skip-models", action="store_true", help="Skip model training (EDA only)")
     parser.add_argument("--skip-shap", action="store_true", help="Skip SHAP analysis")
+    parser.add_argument(
+        "--skip-backtest", action="store_true", help="Skip walk-forward backtesting (faster run)"
+    )
     return parser.parse_args()
 
 
@@ -236,15 +396,28 @@ def main():
     df_clean, daily_global, scaler = stage_preprocess(df_raw)
     feature_df = stage_feature_engineering(daily_global)
 
-    stage_eda(daily_global, df_clean, regional_df=None)
+    location_df, regional_df = stage_spatial(df_clean)
+
+    stage_eda(daily_global, df_clean, regional_df)
 
     df_annotated, anomaly_summary = stage_anomaly(daily_global, df_clean)
+
+    stage_climate_analysis(daily_global)
+    stage_environmental_impact(daily_global, df_clean)
+
+    _stage_regional_analysis(df_clean)
 
     model_results = stage_forecasting(daily_global, feature_df, skip=args.skip_models)
 
     ensemble_results, comparison_df = stage_ensemble(model_results)
 
     stage_feature_importance(model_results, feature_df, skip=args.skip_models or args.skip_shap)
+
+    _stage_statistical_diagnostics(daily_global, model_results)
+
+    _stage_backtesting(daily_global, feature_df, skip=args.skip_models or args.skip_backtest)
+
+    _stage_prediction_intervals(daily_global, feature_df, skip=args.skip_models)
 
     elapsed = time.time() - t_start
     logger.info("=" * 60)
