@@ -35,7 +35,7 @@ def img_to_base64(path):
     p = Path(path)
     if not p.exists():
         return None
-    with open(p, "r") as f:
+    with open(p, "rb") as f:
         data = base64.b64encode(f.read()).decode()
     return f"data:image/png;base64,{data}"
 
