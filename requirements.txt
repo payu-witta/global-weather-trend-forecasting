@@ -28,3 +28,10 @@ prophet>=1.1.4
 # Data pipeline utilities
 pyarrow>=14.0.0
 joblib>=1.3.0
+
+# Data acquisition
+kaggle>=1.6.0
+
+# Notebook environment
+jupyterlab>=4.0.0
+ipywidgets>=8.0.0
