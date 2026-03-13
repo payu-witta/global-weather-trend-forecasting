@@ -56,6 +56,30 @@ def download_from_kaggle(output_dir=None):
         return False
 
 
+def download_from_kagglehub(output_dir=None):
+    """Download the dataset via kagglehub (no API key required)."""
+    try:
+        import kagglehub
+    except ImportError:
+        logger.error("kagglehub package not installed. Run: pip install kagglehub")
+        return False
+
+    import shutil
+
+    output_dir = Path(output_dir) if output_dir else RAW_DATA_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        logger.info("Downloading dataset via kagglehub ...")
+        cache_path = kagglehub.dataset_download("nelgiriyevitha/global-weather-repository")
+        shutil.copytree(cache_path, str(output_dir), dirs_exist_ok=True)
+        logger.info("Dataset copied to: %s", output_dir)
+        return True
+    except Exception as exc:
+        logger.error("kagglehub download failed: %s", exc)
+        return False
+
+
 def find_csv(data_dir=None):
     """Return path to the dataset CSV, or None if not found."""
     data_dir = Path(data_dir) if data_dir else RAW_DATA_DIR
@@ -85,6 +109,9 @@ def load_dataset(data_dir=None, try_kaggle=True):
     if filepath is None and try_kaggle:
         logger.info("Dataset not found locally. Attempting Kaggle download ...")
         success = download_from_kaggle(data_dir)
+        if not success:
+            logger.info("Falling back to kagglehub download ...")
+            success = download_from_kagglehub(data_dir)
         if success:
             filepath = find_csv(data_dir)
 
